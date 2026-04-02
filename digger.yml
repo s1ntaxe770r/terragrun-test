@@ -3,6 +3,18 @@ generate_projects:
     - block_name: example
       terragrunt: true
       root_dir: "infra/"
+      workflow: default
       terragrunt_parsing:
         cascadeDependencies: true
         dependsOnOrdering: true
+
+workflows:
+  default:
+    plan:
+      steps:
+        - init
+        - plan
+    apply:
+      steps:
+        - init
+        - apply
