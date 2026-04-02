@@ -19,4 +19,5 @@ inputs = {
   project_id   = dependency.project.outputs.project_id
   group_id     = dependency.admin_group.outputs.group_id
   role         = "roles/secretmanager.secretAccessor"
+  # trigger: reproduce diamond dependency bug
 }
