@@ -1,0 +1,8 @@
+generate_projects:
+  blocks:
+    - block_name: example
+      terragrunt: true
+      root_dir: "infra/"
+      terragrunt_parsing:
+        cascadeDependencies: true
+        dependsOnOrdering: true
