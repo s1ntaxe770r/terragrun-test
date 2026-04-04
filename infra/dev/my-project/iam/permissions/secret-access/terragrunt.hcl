@@ -20,4 +20,5 @@ inputs = {
   group_id     = dependency.admin_group.outputs.group_id
   role         = "roles/secretmanager.secretAccessor"
   # trigger: reproduce diamond dependency bug
+  app = prod
 }
