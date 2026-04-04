@@ -21,3 +21,4 @@ inputs = {
   role         = "roles/secretmanager.secretAccessor"
   # trigger: reproduce diamond dependency bug
 }
+# trigger: diamond dependency
