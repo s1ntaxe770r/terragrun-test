@@ -1,7 +1,7 @@
 terraform {
-  source = "git::https://github.com/example/modules.git//iam-group?ref=v1.0.0"
+  source = "${get_repo_root()}//modules/random-outputs"
 }
 
 inputs = {
-  group_name = "admin-group"
+  name = "admin-group"
 }

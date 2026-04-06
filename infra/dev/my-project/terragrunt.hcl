@@ -1,5 +1,5 @@
 terraform {
-  source = "git::https://github.com/example/modules.git//project?ref=v1.0.0"
+  source = "${get_repo_root()}//modules/random-outputs"
 }
 
 dependency "admin_group" {
@@ -7,6 +7,5 @@ dependency "admin_group" {
 }
 
 inputs = {
-  project_name   = "my-project"
-  admin_group_id = dependency.admin_group.outputs.group_id
+  name = "my-project"
 }
