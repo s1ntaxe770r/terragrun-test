@@ -1,5 +1,5 @@
 terraform {
-  source = "git::https://github.com/example/modules.git//iam-binding?ref=v1.0.0"
+  source = "."
 }
 
 # Direct dependency on admin-group
@@ -16,8 +16,7 @@ dependency "project" {
 }
 
 inputs = {
-  project_id   = dependency.project.outputs.project_id
-  group_id     = dependency.admin_group.outputs.group_id
-  role         = "roles/secretmanager.secretAccessor"
-  # trigger: reproduce diamond dependency bug
+  project_id = dependency.project.outputs.project_id
+  group_id   = dependency.admin_group.outputs.group_id
+  role       = "roles/secretmanager.secretAccessor"
 }
