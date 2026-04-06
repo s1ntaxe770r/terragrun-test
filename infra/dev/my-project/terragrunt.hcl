@@ -1,5 +1,5 @@
 terraform {
-  source = "git::https://github.com/example/modules.git//project?ref=v1.0.0"
+  source = "."
 }
 
 dependency "admin_group" {
