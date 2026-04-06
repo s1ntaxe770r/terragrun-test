@@ -4,6 +4,8 @@ generate_projects:
       root_dir: "infra/"
       workflow: default
 
+reporting:
+  ai_summary: true
 workflows:
   default:
     plan:
