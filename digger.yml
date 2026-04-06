@@ -7,7 +7,8 @@ generate_projects:
       terragrunt_parsing:
         cascadeDependencies: true
         dependsOnOrdering: true
-
+reporting:
+  ai_summary: true
 workflows:
   default:
     plan:
