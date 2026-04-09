@@ -26,7 +26,7 @@ jobs:
       - uses: diggerhq/digger@vLatest
         with:
           digger-spec: ${{ inputs.spec }}
-          setup-opentofu: true
+          setup-terraform: true
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
