@@ -27,7 +27,6 @@ jobs:
         with:
           digger-spec: ${{ inputs.spec }}
           setup-opentofu: true
-          setup-terragrunt: true
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
