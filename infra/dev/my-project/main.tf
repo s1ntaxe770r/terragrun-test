@@ -7,7 +7,7 @@ terraform {
   }
 }
 
-# 300 random_string resources at 500 chars each
+#300 random_string resources at 500 chars each
 # each resource produces ~600+ chars of plan output -> ~180k chars total
 resource "random_string" "large" {
   count   = 300
