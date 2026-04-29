@@ -6,6 +6,10 @@ generate_projects:
       terragrunt_parsing:
         cascadeDependencies: true
         dependsOnOrdering: true
+  drift_exclude_patterns:
+    - "infra/_global/**"
+  drift_include_patterns:
+    - "infra/dev/**"
 reporting:
   ai_summary: true
 workflows:
