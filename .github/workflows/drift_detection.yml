@@ -1,0 +1,27 @@
+name: Drift Detection
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "50 0 * * *" # 1:50 AM WAT (UTC+1)
+
+jobs:
+  detect-drift:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+      issues: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: digger drift detection
+        uses: diggerhq/digger@feat/exclude-drift
+        with:
+          mode: drift-detection
+          no-backend: true
+          setup-terraform: true
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
