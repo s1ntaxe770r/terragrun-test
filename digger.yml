@@ -22,3 +22,4 @@ workflows:
       steps:
         - init
         - apply
+pr_locks: false
