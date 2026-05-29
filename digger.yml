@@ -1,15 +1,15 @@
 generate_projects:
   blocks:
-    - block_name: infra
-      root_dir: "infra/"
+    - block_name: global
+      root_dir: "infra/_global/"
+      workflow: default
+      include: "**"
+    - block_name: dev
+      root_dir: "infra/dev/"
       workflow: default
       include: "**"
   drift_exclude_blocks:
-    - infra
-  # drift_exclude_patterns:
-  #   - "infra/_global/**"
-  # drift_include_patterns:
-  #   - "infra/dev/**"
+    - global
 reporting:
   ai_summary: true
 workflows:
