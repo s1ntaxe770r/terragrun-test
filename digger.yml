@@ -6,10 +6,10 @@ generate_projects:
       include: "**"
   drift_exclude_blocks:
     - infra
-  drift_exclude_patterns:
-    - "infra/_global/**"
-  drift_include_patterns:
-    - "infra/dev/**"
+  # drift_exclude_patterns:
+  #   - "infra/_global/**"
+  # drift_include_patterns:
+  #   - "infra/dev/**"
 reporting:
   ai_summary: true
 workflows:
