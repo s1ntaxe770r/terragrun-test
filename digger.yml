@@ -4,6 +4,8 @@ generate_projects:
       root_dir: "infra/"
       workflow: default
       include: "**"
+  drift_exclude_blocks:
+    - infra
   drift_exclude_patterns:
     - "infra/_global/**"
   drift_include_patterns:
