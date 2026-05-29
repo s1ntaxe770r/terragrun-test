@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: digger drift detection
-        uses: diggerhq/digger@feat/exclude-drift
+        uses: s1ntaxe770r/digger@feat/block-excludes
         with:
           mode: drift-detection
           no-backend: true
