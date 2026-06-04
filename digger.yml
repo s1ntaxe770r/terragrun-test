@@ -3,11 +3,11 @@ generate_projects:
     - block_name: global
       workflow: default
       include: "infra/_global/**"
+      drift_exclude_patterns:
+        - "infra/_global/**"
     - block_name: dev
       workflow: default
       include: "infra/dev/**"
-  drift_exclude_blocks:
-    - global
 reporting:
   ai_summary: true
 workflows:
