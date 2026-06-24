@@ -17,7 +17,7 @@ jobs:
     env:
       FORK_T: 2
     steps:
-      - uses: actions/checkout@v4=
+      - uses: actions/checkout@v4
       - name: digger drift detection
         uses: s1ntaxe770r/digger@feat/terragrunt-parallelism
         with:
