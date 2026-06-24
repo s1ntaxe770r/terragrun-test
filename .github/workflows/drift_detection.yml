@@ -14,15 +14,22 @@ jobs:
       pull-requests: write
       issues: write
       statuses: write
+    env:
+      TERRAGRUNT_PARALLELISM: "20"
+      TG_PARALLELISM: "20"
     steps:
       - uses: actions/checkout@v4
+      - name: verify terragrunt parallelism env vars are set
+        run: |
+          echo "TERRAGRUNT_PARALLELISM=${TERRAGRUNT_PARALLELISM:?TERRAGRUNT_PARALLELISM is not set}"
+          echo "TG_PARALLELISM=${TG_PARALLELISM:?TG_PARALLELISM is not set}"
       - name: digger drift detection
-        uses: s1ntaxe770r/digger@feat/block-excludes
+        uses: s1ntaxe770r/digger@feat/terragrunt-parallelism
         with:
           mode: drift-detection
           no-backend: true
           setup-terraform: true
-          setup-terragrunt: true 
+          setup-terragrunt: true
           disable-locking: true
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
