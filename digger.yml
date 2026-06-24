@@ -8,6 +8,7 @@ generate_projects:
     - block_name: dev
       workflow: default
       include: "infra/dev/**"
+      terragrunt_parallelism: 20
 reporting:
   ai_summary: true
 workflows:
