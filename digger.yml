@@ -1,14 +1,9 @@
 generate_projects:
   drift_terragrunt_parallelism: 20
   blocks:
-    - block_name: global
-      workflow: default
-      include: "infra/_global/**"
-      drift_exclude_patterns:
-        - "infra/_global/**"
-    - block_name: dev
-      workflow: default
-      include: "infra/dev/**"
+    - block_name: tg
+      terragrunt: true
+      root_dir: tg
 reporting:
   ai_summary: true
 workflows:
