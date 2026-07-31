@@ -1,0 +1,39 @@
+name: Drift Blame E2E
+
+on:
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # blame needs full git history
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Build digger CLI from feat/drift-last-change
+        run: |
+          git clone --depth 1 --branch feat/drift-last-change https://github.com/diggerhq/digger.git "$RUNNER_TEMP/digger-src"
+          cd "$RUNNER_TEMP/digger-src/cli"
+          go build -o "$RUNNER_TEMP/digger-bin" ./cmd/digger
+
+      - name: Run drift detection
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_BACKEND: "true"
+          DISABLE_LOCKING: "true"
+          INPUT_DIGGER_MODE: drift-detection
+          INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL: ${{ secrets.SLACK_DRIFT_WEBHOOK }}
+        run: |
+          "$RUNNER_TEMP/digger-bin" default
