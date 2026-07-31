@@ -1,16 +1,8 @@
-generate_projects:
-  drift_terragrunt_parallelism: 20
-  blocks:
-    - block_name: global
-      workflow: default
-      include: "infra/_global/**"
-      drift_exclude_patterns:
-        - "infra/_global/**"
-    - block_name: dev
-      workflow: default
-      include: "infra/dev/**"
-reporting:
-  ai_summary: true
+projects:
+  - name: drift-blame-demo
+    dir: infra/dev/my-project/iam/permissions/secret-access
+    workflow: default
+    drift_detection: true
 workflows:
   default:
     plan:
