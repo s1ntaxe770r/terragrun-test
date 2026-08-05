@@ -1,6 +1,6 @@
 projects:
-  - name: drift-blame-demo
-    dir: infra/dev/my-project/iam/permissions/secret-access
+  - name: drift-truncation-demo
+    dir: infra/dev/my-project
     workflow: default
     drift_detection: true
 workflows:
