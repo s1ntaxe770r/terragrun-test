@@ -1,0 +1,199 @@
+# Reproduces diggerhq/digger "git command timed out after 30s" during the policy check of a
+# backend-orchestrated (spec / drift) run, on a runner whose inbound traffic from GitHub is
+# throttled with tc so a small management repo clones slowly and predictably.
+#
+# One job, same drift-shaped spec, two binaries back to back:
+#   shipped <shipped_version>   expected: "git command timed out after 30s" (spec git_timeout ignored)
+#   fixed   <fixed_ref>         expected: clone finishes within git_timeout, policy check passes, plan runs
+name: git_timeout e2e (throttled runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rate_kbit:
+        description: "Inbound bandwidth from GitHub git endpoints in kbit/s (0 = delay only)"
+        default: "150"
+      delay_ms:
+        description: "Added one-way delay on inbound packets from GitHub git endpoints, in ms"
+        default: "200"
+      git_timeout:
+        description: "git_timeout (seconds) carried in the spec's policy_provider"
+        default: "120"
+      management_repo:
+        description: "DIGGER_MANAGEMENT_REPO the policy check clones"
+        default: "https://github.com/s1ntaxe770r/digger-heavy-management-repo"
+      fixed_ref:
+        description: "s1ntaxe770r/digger ref to build the fixed EE CLI from"
+        default: "fix/spec-git-timeout"
+      shipped_version:
+        description: "Released EE CLI to compare against"
+        default: "v0.6.153"
+
+run-name: "git_timeout e2e: rate=${{ inputs.rate_kbit }}kbit delay=${{ inputs.delay_ms }}ms git_timeout=${{ inputs.git_timeout }}s"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Build the fixed EE CLI from s1ntaxe770r/digger@${{ inputs.fixed_ref }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${{ inputs.fixed_ref }}" https://github.com/s1ntaxe770r/digger.git "$RUNNER_TEMP/digger-src"
+          cd "$RUNNER_TEMP/digger-src/ee/cli"
+          go build -o "$RUNNER_TEMP/digger-fixed" ./cmd/digger
+          echo "fixed CLI built from $(git rev-parse --short HEAD)"
+
+      - name: Download the shipped EE CLI ${{ inputs.shipped_version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/digger-shipped" \
+            "https://github.com/diggerhq/digger/releases/download/${{ inputs.shipped_version }}/digger-ee-cli-linux-amd64"
+          chmod +x "$RUNNER_TEMP/digger-shipped"
+
+      - name: Build the drift-shaped spec (what drift/controllers/drift.go dispatches)
+        run: |
+          set -euo pipefail
+          jq -cn --argjson gt "${{ inputs.git_timeout }}" '{
+            job_id: "git-timeout-e2e", comment_id: "", run_name: "git_timeout e2e",
+            job: {
+              job_type: "plan", projectName: "dev-my-project", projectDir: "infra/dev/my-project", projectWorkspace: "default",
+              terragrunt: false, opentofu: false, pulumi: false,
+              commands: ["digger plan"],
+              applyStage: {steps: [{action: "init"}, {action: "apply"}]},
+              planStage: {steps: [{action: "init"}, {action: "plan"}]},
+              pullRequestNumber: 0, commit: "", branch: "main", eventName: "drift", requestedBy: "digger",
+              namespace: "s1ntaxe770r/terragrun-test",
+              runEnvVars: {DEFAULT_BRANCH: "main", PR_BRANCH: "main", PROJECT_NAME: "dev-my-project", PROJECT_DIR: "infra/dev/my-project"},
+              stateEnvVars: {}, commandEnvVars: {},
+              backend_hostname: "", backend_organisation_hostname: "", backend_job_token: ""
+            },
+            reporter: {reporter_type: "noop", reporting_strategy: "noop", report_terraform_output: true},
+            comment_updater: {comment_updater_type: "noop"},
+            lock: {lock_type: "noop"},
+            backend: {backend_type: "noop"},
+            vcs: {vcs_type: "noop", actor: "digger", repo_full_name: "s1ntaxe770r/terragrun-test", repo_owner: "s1ntaxe770r", repo_name: "terragrun-test", workflow_file: "digger_workflow.yml"},
+            policy_provider: {policy_type: "http", git_timeout: $gt},
+            variables: []
+          }' > "$RUNNER_TEMP/spec.json"
+          echo "DIGGER_RUN_SPEC=$(cat "$RUNNER_TEMP/spec.json")" >> "$GITHUB_ENV"
+          jq . "$RUNNER_TEMP/spec.json"
+
+      - name: Throttle inbound traffic from GitHub git endpoints
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RATE_KBIT: ${{ inputs.rate_kbit }}
+          DELAY_MS: ${{ inputs.delay_ms }}
+        run: |
+          set -euo pipefail
+          IF=$(ip route get 140.82.112.3 | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i + 1); exit}')
+          mapfile -t CIDRS < <(gh api meta --jq '.git[]' | grep -v ':')
+          NETEM="limit 100000 delay ${DELAY_MS}ms"
+          if [ "$RATE_KBIT" != "0" ]; then NETEM="$NETEM rate ${RATE_KBIT}kbit"; fi
+          sudo modprobe ifb numifbs=1
+          sudo ip link set ifb0 up
+          sudo tc qdisc add dev "$IF" handle ffff: ingress
+          for cidr in "${CIDRS[@]}"; do
+            sudo tc filter add dev "$IF" parent ffff: protocol ip prio 1 u32 match ip src "$cidr" \
+              action mirred egress redirect dev ifb0
+          done
+          sudo tc qdisc add dev ifb0 root netem $NETEM
+          echo "interface=$IF shaped_cidrs=${#CIDRS[@]} netem='$NETEM'"
+          tc qdisc show dev ifb0
+
+      - name: Probe clone under throttle (the exact clone the policy provider runs)
+        id: probe
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          timeout 900 git clone -q --depth 1 --single-branch -b main "${{ inputs.management_repo }}" "$RUNNER_TEMP/probe"
+          secs=$(( $(date +%s) - start ))
+          echo "probe clone took ${secs}s ($(du -sh "$RUNNER_TEMP/probe/.git" | cut -f1))"
+          echo "seconds=$secs" >> "$GITHUB_OUTPUT"
+          rm -rf "$RUNNER_TEMP/probe"
+
+      - name: Run shipped ${{ inputs.shipped_version }} (expected to time out after 30s)
+        id: shipped
+        continue-on-error: true
+        env:
+          DIGGER_MANAGEMENT_REPO: ${{ inputs.management_repo }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGGER_LOG_LEVEL: DEBUG
+          TELEMETRY: "false"
+          DIGGER_OUT: ${{ runner.temp }}/digger-out-shipped.log
+        run: |
+          start=$(date +%s)
+          set +e
+          "$RUNNER_TEMP/digger-shipped" default 2>&1 | tee "$RUNNER_TEMP/shipped.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "elapsed=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+          echo "shipped CLI exit code: $rc"
+          exit "$rc"
+
+      - name: Run fixed build (expected to clone within git_timeout and pass the policy check)
+        id: fixed
+        continue-on-error: true
+        env:
+          DIGGER_MANAGEMENT_REPO: ${{ inputs.management_repo }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGGER_LOG_LEVEL: DEBUG
+          TELEMETRY: "false"
+          DIGGER_OUT: ${{ runner.temp }}/digger-out-fixed.log
+        run: |
+          start=$(date +%s)
+          set +e
+          "$RUNNER_TEMP/digger-fixed" default 2>&1 | tee "$RUNNER_TEMP/fixed.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "elapsed=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+          echo "fixed CLI exit code: $rc"
+          exit "$rc"
+
+      - name: Summarize and assert
+        if: always()
+        env:
+          PROBE_SECONDS: ${{ steps.probe.outputs.seconds }}
+          SHIPPED_OUTCOME: ${{ steps.shipped.outcome }}
+          SHIPPED_ELAPSED: ${{ steps.shipped.outputs.elapsed }}
+          FIXED_OUTCOME: ${{ steps.fixed.outcome }}
+          FIXED_ELAPSED: ${{ steps.fixed.outputs.elapsed }}
+        run: |
+          set -euo pipefail
+          key() { grep -m1 -oE 'git command timed out after [0-9a-z.]+|Access policy allowed action|Access policy denied action' "$1" 2>/dev/null || echo "none"; }
+          shipped_key=$(key "$RUNNER_TEMP/shipped.log")
+          fixed_key=$(key "$RUNNER_TEMP/fixed.log")
+          {
+            echo "## git_timeout e2e on a throttled runner"
+            echo ""
+            echo "- management repo: ${{ inputs.management_repo }}"
+            echo "- inbound GitHub git traffic: rate=${{ inputs.rate_kbit }} kbit/s, delay=${{ inputs.delay_ms }} ms; probe depth-1 clone took ${PROBE_SECONDS:-?}s (Digger default git_timeout is 30s)"
+            echo "- spec policy_provider.git_timeout: ${{ inputs.git_timeout }}s"
+            echo ""
+            echo "| EE CLI | outcome | elapsed | key log line |"
+            echo "|---|---|---|---|"
+            echo "| shipped ${{ inputs.shipped_version }} | ${SHIPPED_OUTCOME} | ${SHIPPED_ELAPSED:-?}s | ${shipped_key} |"
+            echo "| fixed s1ntaxe770r/digger@${{ inputs.fixed_ref }} | ${FIXED_OUTCOME} | ${FIXED_ELAPSED:-?}s | ${fixed_key} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+          if [ "$shipped_key" != "git command timed out after 30s" ]; then
+            echo "::error::expected the shipped CLI to time out after 30s, got: $shipped_key"; exit 1
+          fi
+          if [ "$fixed_key" != "Access policy allowed action" ]; then
+            echo "::error::expected the fixed CLI to clone within git_timeout and pass the policy check, got: $fixed_key"; exit 1
+          fi
+          if [ "$FIXED_OUTCOME" != "success" ]; then
+            echo "::warning::fixed CLI passed the policy check but the rest of the job failed; see its step log"
+          fi
