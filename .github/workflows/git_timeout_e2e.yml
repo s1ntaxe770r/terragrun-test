@@ -29,10 +29,13 @@ on:
         description: "s1ntaxe770r/digger ref to build the fixed EE CLI from"
         default: "fix/spec-git-timeout"
       shipped_version:
-        description: "Released EE CLI to compare against"
-        default: "v0.6.153"
+        description: "Released CLI to compare against"
+        default: "v0.6.152"
+      cli_flavor:
+        description: "oss (cli/, digger-cli-*) or ee (ee/cli, digger-ee-cli-*, needs DIGGER_LICENSE_KEY)"
+        default: "oss"
 
-run-name: "git_timeout e2e: rate=${{ inputs.rate_kbit }}kbit delay=${{ inputs.delay_ms }}ms git_timeout=${{ inputs.git_timeout }}s"
+run-name: "git_timeout e2e (${{ inputs.cli_flavor }}): rate=${{ inputs.rate_kbit }}kbit delay=${{ inputs.delay_ms }}ms git_timeout=${{ inputs.git_timeout }}s"
 
 permissions:
   contents: read
@@ -51,19 +54,21 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Build the fixed EE CLI from s1ntaxe770r/digger@${{ inputs.fixed_ref }}
+      - name: Build the fixed ${{ inputs.cli_flavor }} CLI from s1ntaxe770r/digger@${{ inputs.fixed_ref }}
         run: |
           set -euo pipefail
           git clone --depth 1 --branch "${{ inputs.fixed_ref }}" https://github.com/s1ntaxe770r/digger.git "$RUNNER_TEMP/digger-src"
-          cd "$RUNNER_TEMP/digger-src/ee/cli"
+          if [ "${{ inputs.cli_flavor }}" = "ee" ]; then cd "$RUNNER_TEMP/digger-src/ee/cli"; else cd "$RUNNER_TEMP/digger-src/cli"; fi
           go build -o "$RUNNER_TEMP/digger-fixed" ./cmd/digger
           echo "fixed CLI built from $(git rev-parse --short HEAD)"
 
-      - name: Download the shipped EE CLI ${{ inputs.shipped_version }}
+      - name: Download the shipped ${{ inputs.cli_flavor }} CLI ${{ inputs.shipped_version }}
         run: |
           set -euo pipefail
+          if [ "${{ inputs.cli_flavor }}" = "ee" ]; then asset=digger-ee-cli-linux-amd64; else asset=digger-cli-linux-amd64; fi
+          echo "downloading $asset"
           curl -fsSL -o "$RUNNER_TEMP/digger-shipped" \
-            "https://github.com/diggerhq/digger/releases/download/${{ inputs.shipped_version }}/digger-ee-cli-linux-amd64"
+            "https://github.com/diggerhq/digger/releases/download/${{ inputs.shipped_version }}/$asset"
           chmod +x "$RUNNER_TEMP/digger-shipped"
 
       - name: Build the drift-shaped spec (what drift/controllers/drift.go dispatches)
@@ -225,22 +230,26 @@ jobs:
           FIXED_ELAPSED: ${{ steps.fixed.outputs.elapsed }}
         run: |
           set -euo pipefail
-          key() { grep -m1 -oE 'git command timed out after [0-9a-z.]+|Access policy allowed action|Access policy denied action' "$1" 2>/dev/null || echo "none"; }
+          key() { grep -m1 -oE 'git command timed out after [0-9a-z.]+|Access policy allowed action|Access policy denied action|error while fetching access policy[^"]*|unexpected response while fetching [a-z]+ policy[^"]*|No policies will be supported' "$1" 2>/dev/null || echo "none"; }
+          echo "git clones attempted by the shipped CLI: $(grep -c 'Cloning into' "$RUNNER_TEMP/shipped.log" || true); by the fixed CLI: $(grep -c 'Cloning into' "$RUNNER_TEMP/fixed.log" || true)"
           shipped_key=$(key "$RUNNER_TEMP/shipped.log")
           fixed_key=$(key "$RUNNER_TEMP/fixed.log")
           {
-            echo "## git_timeout e2e on a throttled runner"
+            echo "## git_timeout e2e on a throttled runner (${{ inputs.cli_flavor }} CLI)"
             echo ""
             echo "- management repo: ${{ inputs.management_repo }}"
             echo "- requested throttle: rate=${{ inputs.rate_kbit }} kbit/s, delay=${{ inputs.delay_ms }} ms; tc installed=${TC_OK:-?} effective=${TC_EFFECTIVE:-?}; probe depth-1 clone took ${PROBE_SECONDS:-?}s under tc${PROXY_SECONDS:+, then ${PROXY_SECONDS}s through the proxy fallback} (Digger default git_timeout is 30s)"
             echo "- spec policy_provider.git_timeout: ${{ inputs.git_timeout }}s"
             echo ""
-            echo "| EE CLI | outcome | elapsed | key log line |"
+            echo "| ${{ inputs.cli_flavor }} CLI | outcome | elapsed | key log line |"
             echo "|---|---|---|---|"
             echo "| shipped ${{ inputs.shipped_version }} | ${SHIPPED_OUTCOME} | ${SHIPPED_ELAPSED:-?}s | ${shipped_key} |"
             echo "| fixed s1ntaxe770r/digger@${{ inputs.fixed_ref }} | ${FIXED_OUTCOME} | ${FIXED_ELAPSED:-?}s | ${fixed_key} |"
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
+          if [ "${{ inputs.cli_flavor }}" != "ee" ]; then
+            echo "oss flavor: no timeout expectations, the table above is the result"; exit 0
+          fi
           if [ "$shipped_key" != "git command timed out after 30s" ]; then
             echo "::error::expected the shipped CLI to time out after 30s, got: $shipped_key"; exit 1
           fi
