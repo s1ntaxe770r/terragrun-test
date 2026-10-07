@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       rate_kbit:
-        description: "Inbound bandwidth from GitHub git endpoints in kbit/s (0 = delay only)"
+        description: "Inbound bandwidth from GitHub git endpoints in kbit/s (0 with delay_ms=0 = no throttle, e.g. for the heavy repo)"
         default: "150"
       delay_ms:
         description: "Added one-way delay on inbound packets from GitHub git endpoints, in ms"
@@ -96,6 +96,7 @@ jobs:
 
       - name: Throttle inbound traffic from GitHub git endpoints (tc)
         id: tc
+        if: ${{ inputs.rate_kbit != '0' || inputs.delay_ms != '0' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RATE_KBIT: ${{ inputs.rate_kbit }}
@@ -136,6 +137,7 @@ jobs:
 
       - name: Probe clone under tc throttle (the exact clone the policy provider runs)
         id: probe
+        if: ${{ inputs.rate_kbit != '0' || inputs.delay_ms != '0' }}
         run: |
           set -euo pipefail
           start=$(date +%s)
@@ -153,7 +155,7 @@ jobs:
 
       - name: Fallback - throttle git through a bandwidth-limited CONNECT proxy
         id: proxy
-        if: ${{ steps.probe.outputs.tc_effective != 'true' }}
+        if: ${{ (inputs.rate_kbit != '0' || inputs.delay_ms != '0') && steps.probe.outputs.tc_effective != 'true' }}
         env:
           RATE_KBIT: ${{ inputs.rate_kbit }}
         run: |
