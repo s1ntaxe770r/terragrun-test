@@ -102,11 +102,21 @@ jobs:
           mapfile -t CIDRS < <(gh api meta --jq '.git[]' | grep -v ':')
           NETEM="limit 100000 delay ${DELAY_MS}ms"
           if [ "$RATE_KBIT" != "0" ]; then NETEM="$NETEM rate ${RATE_KBIT}kbit"; fi
+          echo "qdiscs on $IF before:"; tc qdisc show dev "$IF"
           sudo modprobe ifb numifbs=1
           sudo ip link set ifb0 up
-          sudo tc qdisc add dev "$IF" handle ffff: ingress
+          # the runner image may already have an ingress or clsact qdisc on the interface
+          # (adding a second one fails with "Exclusivity flag on, cannot modify"), so attach to it
+          if tc qdisc show dev "$IF" | grep -q 'qdisc clsact'; then
+            PARENT="ffff:fff2"
+          elif tc qdisc show dev "$IF" | grep -q 'qdisc ingress'; then
+            PARENT="ffff:"
+          else
+            sudo tc qdisc add dev "$IF" handle ffff: ingress
+            PARENT="ffff:"
+          fi
           for cidr in "${CIDRS[@]}"; do
-            sudo tc filter add dev "$IF" parent ffff: protocol ip prio 1 u32 match ip src "$cidr" \
+            sudo tc filter add dev "$IF" parent "$PARENT" protocol ip prio 1 u32 match ip src "$cidr" \
               action mirred egress redirect dev ifb0
           done
           sudo tc qdisc add dev ifb0 root netem $NETEM
