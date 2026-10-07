@@ -21,7 +21,7 @@ on:
         default: "120"
       management_repo:
         description: "DIGGER_MANAGEMENT_REPO the policy check clones"
-        default: "https://github.com/s1ntaxe770r/digger-heavy-management-repo"
+        default: "https://github.com/s1ntaxe770r/digger-small-management-repo"
       fixed_ref:
         description: "s1ntaxe770r/digger ref to build the fixed EE CLI from"
         default: "fix/spec-git-timeout"
@@ -141,12 +141,16 @@ jobs:
           echo "probe clone took ${secs}s ($(du -sh "$RUNNER_TEMP/probe/.git" | cut -f1))"
           echo "seconds=$secs" >> "$GITHUB_OUTPUT"
           rm -rf "$RUNNER_TEMP/probe"
-          echo "ifb0 counters after the probe (packets here prove the redirect works):"
-          tc -s qdisc show dev ifb0 || true
+          # GitHub-hosted runners carry a clsact BPF filter (tc_ingress_traffic, pref 1, direct-action)
+          # that returns a verdict before any later filter runs, so the redirect to ifb0 never fires.
+          # Decide on packets that actually went through ifb0, not on wall time.
+          pkts=$(tc -s qdisc show dev ifb0 2>/dev/null | grep -oE 'Sent [0-9]+ bytes [0-9]+ pkt' | awk '{print $4}' || echo 0)
+          echo "ifb0 saw ${pkts:-0} packets during the probe"
+          if [ "${pkts:-0}" -ge 1000 ]; then echo "tc_effective=true" >> "$GITHUB_OUTPUT"; else echo "tc_effective=false" >> "$GITHUB_OUTPUT"; fi
 
       - name: Fallback - throttle git through a bandwidth-limited CONNECT proxy
         id: proxy
-        if: ${{ steps.probe.outputs.seconds < 15 }}
+        if: ${{ steps.probe.outputs.tc_effective != 'true' }}
         env:
           RATE_KBIT: ${{ inputs.rate_kbit }}
         run: |
@@ -206,6 +210,7 @@ jobs:
         env:
           PROBE_SECONDS: ${{ steps.probe.outputs.seconds }}
           TC_OK: ${{ steps.tc.outputs.ok }}
+          TC_EFFECTIVE: ${{ steps.probe.outputs.tc_effective }}
           PROXY_SECONDS: ${{ steps.proxy.outputs.seconds }}
           SHIPPED_OUTCOME: ${{ steps.shipped.outcome }}
           SHIPPED_ELAPSED: ${{ steps.shipped.outputs.elapsed }}
@@ -220,7 +225,7 @@ jobs:
             echo "## git_timeout e2e on a throttled runner"
             echo ""
             echo "- management repo: ${{ inputs.management_repo }}"
-            echo "- requested throttle: rate=${{ inputs.rate_kbit }} kbit/s, delay=${{ inputs.delay_ms }} ms; tc shaping ok=${TC_OK:-?}; probe depth-1 clone took ${PROBE_SECONDS:-?}s under tc${PROXY_SECONDS:+, then ${PROXY_SECONDS}s through the proxy fallback} (Digger default git_timeout is 30s)"
+            echo "- requested throttle: rate=${{ inputs.rate_kbit }} kbit/s, delay=${{ inputs.delay_ms }} ms; tc installed=${TC_OK:-?} effective=${TC_EFFECTIVE:-?}; probe depth-1 clone took ${PROBE_SECONDS:-?}s under tc${PROXY_SECONDS:+, then ${PROXY_SECONDS}s through the proxy fallback} (Digger default git_timeout is 30s)"
             echo "- spec policy_provider.git_timeout: ${{ inputs.git_timeout }}s"
             echo ""
             echo "| EE CLI | outcome | elapsed | key log line |"
