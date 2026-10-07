@@ -91,39 +91,47 @@ jobs:
           echo "DIGGER_RUN_SPEC=$(cat "$RUNNER_TEMP/spec.json")" >> "$GITHUB_ENV"
           jq . "$RUNNER_TEMP/spec.json"
 
-      - name: Throttle inbound traffic from GitHub git endpoints
+      - name: Throttle inbound traffic from GitHub git endpoints (tc)
+        id: tc
         env:
           GH_TOKEN: ${{ github.token }}
           RATE_KBIT: ${{ inputs.rate_kbit }}
           DELAY_MS: ${{ inputs.delay_ms }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           IF=$(ip route get 140.82.112.3 | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i + 1); exit}')
           mapfile -t CIDRS < <(gh api meta --jq '.git[]' | grep -v ':')
           NETEM="limit 100000 delay ${DELAY_MS}ms"
           if [ "$RATE_KBIT" != "0" ]; then NETEM="$NETEM rate ${RATE_KBIT}kbit"; fi
           echo "qdiscs on $IF before:"; tc qdisc show dev "$IF"
-          sudo modprobe ifb numifbs=1
-          sudo ip link set ifb0 up
-          # the runner image may already have an ingress or clsact qdisc on the interface
-          # (adding a second one fails with "Exclusivity flag on, cannot modify"), so attach to it
-          if tc qdisc show dev "$IF" | grep -q 'qdisc clsact'; then
-            PARENT="ffff:fff2"
-          elif tc qdisc show dev "$IF" | grep -q 'qdisc ingress'; then
-            PARENT="ffff:"
+          echo "ingress filters on $IF before:"; tc filter show dev "$IF" ingress || true
+          shape() {
+            sudo modprobe ifb numifbs=1 || return 1
+            sudo ip link set ifb0 up || return 1
+            # the runner image already has a clsact qdisc with a pref-1 filter on eth0: attach to it
+            # (a second ingress qdisc fails with "Exclusivity flag on", prio 1 with "Protocol mismatch")
+            if tc qdisc show dev "$IF" | grep -q 'qdisc clsact'; then PARENT="ffff:fff2"
+            elif tc qdisc show dev "$IF" | grep -q 'qdisc ingress'; then PARENT="ffff:"
+            else sudo tc qdisc add dev "$IF" handle ffff: ingress || return 1; PARENT="ffff:"; fi
+            PRIO=4000
+            while tc filter show dev "$IF" ingress | grep -q "pref $PRIO "; do PRIO=$((PRIO + 1)); done
+            for cidr in "${CIDRS[@]}"; do
+              sudo tc filter add dev "$IF" parent "$PARENT" protocol ip prio "$PRIO" u32 match ip src "$cidr" \
+                action mirred egress redirect dev ifb0 || return 1
+            done
+            sudo tc qdisc add dev ifb0 root netem $NETEM || return 1
+          }
+          if shape; then
+            echo "tc: shaping inbound traffic from ${#CIDRS[@]} GitHub CIDRs on $IF via ifb0 with netem '$NETEM'"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
           else
-            sudo tc qdisc add dev "$IF" handle ffff: ingress
-            PARENT="ffff:"
+            echo "::warning::tc shaping failed on this runner; the proxy fallback will be used"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
-          for cidr in "${CIDRS[@]}"; do
-            sudo tc filter add dev "$IF" parent "$PARENT" protocol ip prio 1 u32 match ip src "$cidr" \
-              action mirred egress redirect dev ifb0
-          done
-          sudo tc qdisc add dev ifb0 root netem $NETEM
-          echo "interface=$IF shaped_cidrs=${#CIDRS[@]} netem='$NETEM'"
-          tc qdisc show dev ifb0
+          echo "ingress filters on $IF after:"; tc filter show dev "$IF" ingress || true
+          tc -s qdisc show dev ifb0 || true
 
-      - name: Probe clone under throttle (the exact clone the policy provider runs)
+      - name: Probe clone under tc throttle (the exact clone the policy provider runs)
         id: probe
         run: |
           set -euo pipefail
@@ -133,6 +141,27 @@ jobs:
           echo "probe clone took ${secs}s ($(du -sh "$RUNNER_TEMP/probe/.git" | cut -f1))"
           echo "seconds=$secs" >> "$GITHUB_OUTPUT"
           rm -rf "$RUNNER_TEMP/probe"
+          echo "ifb0 counters after the probe (packets here prove the redirect works):"
+          tc -s qdisc show dev ifb0 || true
+
+      - name: Fallback - throttle git through a bandwidth-limited CONNECT proxy
+        id: proxy
+        if: ${{ steps.probe.outputs.seconds < 15 }}
+        env:
+          RATE_KBIT: ${{ inputs.rate_kbit }}
+        run: |
+          set -euo pipefail
+          rate_bps=$(( RATE_KBIT > 0 ? RATE_KBIT * 125 : 18750 ))
+          nohup python3 .github/scripts/throttle_proxy.py 8118 "$rate_bps" > "$RUNNER_TEMP/proxy.log" 2>&1 &
+          sleep 1
+          git config --global http.proxy http://127.0.0.1:8118
+          echo "git now clones through 127.0.0.1:8118 limited to ${rate_bps} B/s"
+          start=$(date +%s)
+          timeout 900 git clone -q --depth 1 --single-branch -b main "${{ inputs.management_repo }}" "$RUNNER_TEMP/probe2"
+          secs=$(( $(date +%s) - start ))
+          echo "probe clone through the proxy took ${secs}s"
+          echo "seconds=$secs" >> "$GITHUB_OUTPUT"
+          rm -rf "$RUNNER_TEMP/probe2"
 
       - name: Run shipped ${{ inputs.shipped_version }} (expected to time out after 30s)
         id: shipped
@@ -176,6 +205,8 @@ jobs:
         if: always()
         env:
           PROBE_SECONDS: ${{ steps.probe.outputs.seconds }}
+          TC_OK: ${{ steps.tc.outputs.ok }}
+          PROXY_SECONDS: ${{ steps.proxy.outputs.seconds }}
           SHIPPED_OUTCOME: ${{ steps.shipped.outcome }}
           SHIPPED_ELAPSED: ${{ steps.shipped.outputs.elapsed }}
           FIXED_OUTCOME: ${{ steps.fixed.outcome }}
@@ -189,7 +220,7 @@ jobs:
             echo "## git_timeout e2e on a throttled runner"
             echo ""
             echo "- management repo: ${{ inputs.management_repo }}"
-            echo "- inbound GitHub git traffic: rate=${{ inputs.rate_kbit }} kbit/s, delay=${{ inputs.delay_ms }} ms; probe depth-1 clone took ${PROBE_SECONDS:-?}s (Digger default git_timeout is 30s)"
+            echo "- requested throttle: rate=${{ inputs.rate_kbit }} kbit/s, delay=${{ inputs.delay_ms }} ms; tc shaping ok=${TC_OK:-?}; probe depth-1 clone took ${PROBE_SECONDS:-?}s under tc${PROXY_SECONDS:+, then ${PROXY_SECONDS}s through the proxy fallback} (Digger default git_timeout is 30s)"
             echo "- spec policy_provider.git_timeout: ${{ inputs.git_timeout }}s"
             echo ""
             echo "| EE CLI | outcome | elapsed | key log line |"
