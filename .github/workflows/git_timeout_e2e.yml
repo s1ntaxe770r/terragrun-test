@@ -5,6 +5,9 @@
 # One job, same drift-shaped spec, two binaries back to back:
 #   shipped <shipped_version>   expected: "git command timed out after 30s" (spec git_timeout ignored)
 #   fixed   <fixed_ref>         expected: clone finishes within git_timeout, policy check passes, plan runs
+# Both binaries are the EE CLI (the management-repo policy provider only exists there), so the
+# repo needs a DIGGER_LICENSE_KEY secret. tc shaping is attempted first but GitHub-hosted runners
+# carry a clsact BPF filter (tc_ingress_traffic) that pre-empts it, so the proxy fallback is what works there.
 name: git_timeout e2e (throttled runner)
 
 on:
@@ -172,6 +175,7 @@ jobs:
         continue-on-error: true
         env:
           DIGGER_MANAGEMENT_REPO: ${{ inputs.management_repo }}
+          DIGGER_LICENSE_KEY: ${{ secrets.DIGGER_LICENSE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DIGGER_LOG_LEVEL: DEBUG
           TELEMETRY: "false"
@@ -191,6 +195,7 @@ jobs:
         continue-on-error: true
         env:
           DIGGER_MANAGEMENT_REPO: ${{ inputs.management_repo }}
+          DIGGER_LICENSE_KEY: ${{ secrets.DIGGER_LICENSE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DIGGER_LOG_LEVEL: DEBUG
           TELEMETRY: "false"
