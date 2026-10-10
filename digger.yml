@@ -1,7 +1,7 @@
 generate_projects:
   blocks:
     - block_name: infra
-      root_dir: "infra/"
+      include: "infra/**"
       workflow: default
 
 reporting:
