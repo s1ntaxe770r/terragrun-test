@@ -52,3 +52,5 @@ output "ids" {
 output "integers" {
   value = random_integer.large[*].result
 }
+
+# PR trigger diagnostic: comment-only change; no resource changes.
