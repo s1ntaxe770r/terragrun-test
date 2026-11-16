@@ -21,3 +21,5 @@ resource "random_integer" "group_priority" {
 output "group_id"       { value = random_id.group_id.hex }
 output "group_name"     { value = random_pet.group_name.id }
 output "group_priority" { value = random_integer.group_priority.result }
+
+# repro: set-status 500 on plan report (2026-11-16T15:22:02Z)
