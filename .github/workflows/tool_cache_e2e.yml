@@ -1,8 +1,9 @@
 # Checks that the Digger action reuses the terraform and terragrunt binaries from tool-cache-dir
 # (s1ntaxe770r/digger@fix/terragrunt-tool-cache). One job, same tool-cache-dir, the action three times:
 #   run 1  cold: both binaries downloaded into <tool-cache-dir>/<tool>/<version>/<arch>
-#   run 2  warm: nothing re-downloaded (file sizes and mtimes unchanged)
-#   run 3  after truncating both cached binaries: both re-downloaded (mtimes newer, sizes restored)
+#   run 2  warm: nothing re-downloaded (file sizes and inode change times unchanged)
+#   run 3  after truncating both cached binaries: both re-downloaded (change times newer, sizes restored;
+#          mtime is useless for terraform because unzip restores the archive timestamp)
 # The digger CLI itself exits non-zero on a workflow_dispatch with no spec, so the action steps use
 # continue-on-error; only the setup steps and the cache directory are asserted on.
 name: tool cache e2e
@@ -47,7 +48,7 @@ jobs:
       - name: Snapshot after run 1
         run: |
           set -euo pipefail
-          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Y' {} | tee "$RUNNER_TEMP/snap1"
+          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Z' {} | tee "$RUNNER_TEMP/snap1"
           test -x "$TOOL_CACHE/terraform/${{ inputs.terraform_version }}/amd64/terraform"
           test -x "$TOOL_CACHE/terragrunt/${{ inputs.terragrunt_version }}/amd64/terragrunt"
 
@@ -69,7 +70,7 @@ jobs:
       - name: Assert run 2 reused both binaries
         run: |
           set -euo pipefail
-          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Y' {} | tee "$RUNNER_TEMP/snap2"
+          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Z' {} | tee "$RUNNER_TEMP/snap2"
           diff "$RUNNER_TEMP/snap1" "$RUNNER_TEMP/snap2" && echo "OK: cache directory unchanged after run 2"
 
       - name: Truncate both cached binaries
@@ -97,14 +98,14 @@ jobs:
       - name: Assert run 3 re-downloaded both binaries
         run: |
           set -euo pipefail
-          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Y' {} | tee "$RUNNER_TEMP/snap3"
+          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Z' {} | tee "$RUNNER_TEMP/snap3"
           for tool in terraform terragrunt; do
             size1=$(grep "/$tool/" "$RUNNER_TEMP/snap1" | awk '{print $2}')
             size3=$(grep "/$tool/" "$RUNNER_TEMP/snap3" | awk '{print $2}')
-            mtime1=$(grep "/$tool/" "$RUNNER_TEMP/snap1" | awk '{print $3}')
-            mtime3=$(grep "/$tool/" "$RUNNER_TEMP/snap3" | awk '{print $3}')
+            ctime1=$(grep "/$tool/" "$RUNNER_TEMP/snap1" | awk '{print $3}')
+            ctime3=$(grep "/$tool/" "$RUNNER_TEMP/snap3" | awk '{print $3}')
             [ "$size1" = "$size3" ] || { echo "::error::$tool size after re-download ($size3) differs from run 1 ($size1)"; exit 1; }
-            [ "$mtime3" -gt "$mtime1" ] || { echo "::error::$tool was not re-downloaded in run 3"; exit 1; }
+            [ "$ctime3" -gt "$ctime1" ] || { echo "::error::$tool was not re-downloaded in run 3"; exit 1; }
             echo "OK: $tool re-downloaded in run 3 ($size3 bytes)"
           done
           {
