@@ -1,0 +1,120 @@
+# Checks that the Digger action reuses the terraform and terragrunt binaries from tool-cache-dir
+# (s1ntaxe770r/digger@fix/terragrunt-tool-cache). One job, same tool-cache-dir, the action three times:
+#   run 1  cold: both binaries downloaded into <tool-cache-dir>/<tool>/<version>/<arch>
+#   run 2  warm: nothing re-downloaded (file sizes and mtimes unchanged)
+#   run 3  after truncating both cached binaries: both re-downloaded (mtimes newer, sizes restored)
+# The digger CLI itself exits non-zero on a workflow_dispatch with no spec, so the action steps use
+# continue-on-error; only the setup steps and the cache directory are asserted on.
+name: tool cache e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      terraform_version:
+        default: "1.5.5"
+      terragrunt_version:
+        default: "1.1.2"
+
+run-name: "tool cache e2e: terraform ${{ inputs.terraform_version }}, terragrunt ${{ inputs.terragrunt_version }}"
+
+permissions:
+  contents: read
+
+env:
+  TOOL_CACHE: ${{ github.workspace }}/.tool-cache
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run 1 (cold cache)
+        id: run1
+        continue-on-error: true
+        uses: s1ntaxe770r/digger@fix/terragrunt-tool-cache
+        with:
+          digger-version: v0.6.155
+          no-backend: true
+          setup-terraform: true
+          terraform-version: ${{ inputs.terraform_version }}
+          setup-terragrunt: true
+          terragrunt-version: ${{ inputs.terragrunt_version }}
+          tool-cache-dir: ${{ github.workspace }}/.tool-cache
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Snapshot after run 1
+        run: |
+          set -euo pipefail
+          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Y' {} | tee "$RUNNER_TEMP/snap1"
+          test -x "$TOOL_CACHE/terraform/${{ inputs.terraform_version }}/amd64/terraform"
+          test -x "$TOOL_CACHE/terragrunt/${{ inputs.terragrunt_version }}/amd64/terragrunt"
+
+      - name: Run 2 (warm cache)
+        id: run2
+        continue-on-error: true
+        uses: s1ntaxe770r/digger@fix/terragrunt-tool-cache
+        with:
+          digger-version: v0.6.155
+          no-backend: true
+          setup-terraform: true
+          terraform-version: ${{ inputs.terraform_version }}
+          setup-terragrunt: true
+          terragrunt-version: ${{ inputs.terragrunt_version }}
+          tool-cache-dir: ${{ github.workspace }}/.tool-cache
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assert run 2 reused both binaries
+        run: |
+          set -euo pipefail
+          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Y' {} | tee "$RUNNER_TEMP/snap2"
+          diff "$RUNNER_TEMP/snap1" "$RUNNER_TEMP/snap2" && echo "OK: cache directory unchanged after run 2"
+
+      - name: Truncate both cached binaries
+        run: |
+          set -euo pipefail
+          echo garbage > "$TOOL_CACHE/terraform/${{ inputs.terraform_version }}/amd64/terraform"
+          echo garbage > "$TOOL_CACHE/terragrunt/${{ inputs.terragrunt_version }}/amd64/terragrunt"
+          sleep 1
+
+      - name: Run 3 (corrupt cache)
+        id: run3
+        continue-on-error: true
+        uses: s1ntaxe770r/digger@fix/terragrunt-tool-cache
+        with:
+          digger-version: v0.6.155
+          no-backend: true
+          setup-terraform: true
+          terraform-version: ${{ inputs.terraform_version }}
+          setup-terragrunt: true
+          terragrunt-version: ${{ inputs.terragrunt_version }}
+          tool-cache-dir: ${{ github.workspace }}/.tool-cache
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assert run 3 re-downloaded both binaries
+        run: |
+          set -euo pipefail
+          find "$TOOL_CACHE" -type f | sort | xargs -I{} stat -c '%n %s %Y' {} | tee "$RUNNER_TEMP/snap3"
+          for tool in terraform terragrunt; do
+            size1=$(grep "/$tool/" "$RUNNER_TEMP/snap1" | awk '{print $2}')
+            size3=$(grep "/$tool/" "$RUNNER_TEMP/snap3" | awk '{print $2}')
+            mtime1=$(grep "/$tool/" "$RUNNER_TEMP/snap1" | awk '{print $3}')
+            mtime3=$(grep "/$tool/" "$RUNNER_TEMP/snap3" | awk '{print $3}')
+            [ "$size1" = "$size3" ] || { echo "::error::$tool size after re-download ($size3) differs from run 1 ($size1)"; exit 1; }
+            [ "$mtime3" -gt "$mtime1" ] || { echo "::error::$tool was not re-downloaded in run 3"; exit 1; }
+            echo "OK: $tool re-downloaded in run 3 ($size3 bytes)"
+          done
+          {
+            echo "## tool cache e2e"
+            echo ""
+            echo "| run | terraform | terragrunt |"
+            echo "|---|---|---|"
+            echo "| 1 cold | downloaded | downloaded |"
+            echo "| 2 warm | reused | reused |"
+            echo "| 3 corrupt | re-downloaded | re-downloaded |"
+            echo ""
+            echo "digger CLI step outcomes (expected to fail without a spec): run1=${{ steps.run1.outcome }} run2=${{ steps.run2.outcome }} run3=${{ steps.run3.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
